@@ -3,6 +3,7 @@ module Main where
 
 import Control.Lens
 import Control.Monad
+import Control.Monad.Loops
 import Control.Monad.Random
 import Control.Monad.State.Lazy
 import Data.List
@@ -30,8 +31,9 @@ data Goal = Goal { _goalPos :: Pos
                  , _goalActions :: [GoalAction] }
           deriving Show
 $(makeLenses ''Goal)
-data Wall = Wall { wallPos :: Pos }
+data Wall = Wall { _wallPos :: Pos }
           deriving Show
+$(makeLenses ''Wall)
 data GameLevel = GameLevel { _lvlBoxes :: [Box]
                            , _lvlGoals :: [Goal]
                            , _lvlWalls :: [Wall]
@@ -40,20 +42,20 @@ data GameLevel = GameLevel { _lvlBoxes :: [Box]
 $(makeLenses ''GameLevel)
 
 class Colored a where
-  getColor :: a -> Color
+  color :: Functor f => (Color -> f Color) -> a -> f a
 instance Colored Box where
-  getColor = _boxColor
+  color = boxColor
 instance Colored Goal where
-  getColor = _goalColor
+  color = goalColor
 
 class Positioned a where
-  getPos :: a -> Pos
+  pos :: Functor f => (Pos -> f Pos) -> a -> f a
 instance Positioned Box where
-  getPos = _boxPos
+  pos = boxPos
 instance Positioned Goal where
-  getPos = _goalPos
+  pos = goalPos
 instance Positioned Wall where
-  getPos = wallPos
+  pos = wallPos
 
 isGameOver :: GameLevel -> Bool
 isGameOver = null . _lvlGoals
@@ -61,13 +63,12 @@ isGameOver = null . _lvlGoals
 inBounds :: Positioned a => Dimensions -> a -> Bool
 inBounds (Dimensions dx dy) box = x >= 0 && x < dx && y >= 0 && y < dy
   where
-    p = getPos box
+    p = box^.pos
     x = posX p
     y = posY p
 
-clearOfPositioned
-  :: (Positioned a, Positioned a1) => a -> [a1] -> Bool
-clearOfPositioned p ps = (getPos p) `notElem` (map getPos ps)
+clearOfPositioned :: (Positioned a, Positioned a1) => a -> [a1] -> Bool
+clearOfPositioned p ps = (p^.pos) `notElem` (map (^.pos) ps)
 
 movePos :: Direction -> Pos -> Pos
 movePos dir (Pos x y) = case dir of
@@ -79,14 +80,12 @@ movePos dir (Pos x y) = case dir of
 moveBox :: Direction -> Box -> Box
 moveBox dir = boxPos %~ movePos dir
 
-reachedGoal' :: Pos -> Color -> [Pos] -> [Color] -> Bool
-reachedGoal' p c ps cs = anyOf folded (== (p,c)) $ zip ps cs
-
-reachedGoal
-  :: (Positioned a, Positioned a1, Colored a, Colored a1) =>
-     a -> [a1] -> Bool
-reachedGoal box goals =
-  reachedGoal' (getPos box) (getColor box) (map getPos goals) (map getColor goals)
+reachedGoal :: (Positioned a, Positioned a1, Colored a, Colored a1) => a -> [a1] -> Bool
+reachedGoal box goals = any (== (p,c)) $ zip ps cs
+  where p = box^.pos
+        c = box^.color
+        ps = map (^.pos) goals
+        cs = map (^.color) goals
 
 determineBoxActions :: Direction -> GameLevel -> Box -> [BoxAction]
 determineBoxActions dir lvl box
@@ -138,6 +137,11 @@ stepLevel dir = do lvl <- get
                        (newLvl, doneMoving) = applyActions dir withActions
                    put newLvl
                    return doneMoving
+
+moveOnLevel :: Direction -> State GameLevel ()
+moveOnLevel dir = do lvl <- get
+                     put $ execState (iterateUntil id (stepLevel dir)) lvl
+                     return ()
 
 vertical :: [Direction]
 vertical = [DirUp, DirDown]
