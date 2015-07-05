@@ -7,11 +7,13 @@ import Control.Monad.Loops
 import Control.Monad.Random
 import Control.Monad.State.Lazy
 import Data.List
+import Data.Set (Set)
+import qualified Data.Set as Set
 
 data Color = Red | Green | Blue
            deriving (Show, Eq)
 data Pos = Pos { posX :: Int, posY :: Int}
-           deriving (Show, Eq)
+           deriving (Show, Eq, Ord)
 data Dimensions = Dimensions { dimX :: Int, dimY :: Int}
                 deriving Show
 data Direction = DirUp | DirDown | DirLeft | DirRight
@@ -111,8 +113,8 @@ tagGoalActions lvl goal = goal & goalActions .~ newActions
 
 determineActions :: Direction -> GameLevel -> GameLevel
 determineActions dir lvl = lvl
-                           & lvlBoxes %~ map (tagBoxActions dir lvl)
-                           & lvlGoals %~ map (tagGoalActions lvl)
+                           & lvlBoxes.mapped %~ (tagBoxActions dir lvl)
+                           & lvlGoals.mapped %~ (tagGoalActions lvl)
 
 applyBoxActions :: Direction -> GameLevel -> (GameLevel, Bool)
 applyBoxActions dir lvl = (lvl & lvlBoxes .~ immobile ++ movedBoxes, null mobile)
@@ -123,7 +125,7 @@ applyBoxActions dir lvl = (lvl & lvlBoxes .~ immobile ++ movedBoxes, null mobile
         movedBoxes = map (moveBox dir) mobile
 
 applyGoalActions :: GameLevel -> GameLevel
-applyGoalActions lvl = lvl & lvlGoals %~ (^..folded.filtered shouldKeepGoal)
+applyGoalActions = lvlGoals %~ (^..folded.filtered shouldKeepGoal)
   where shouldKeepGoal = noneOf (goalActions.folded) (==GoalDisappear)
 
 applyActions :: Direction -> GameLevel -> (GameLevel, Bool)
@@ -138,10 +140,11 @@ stepLevel dir = do lvl <- get
                    put newLvl
                    return doneMoving
 
-moveOnLevel :: Direction -> State GameLevel ()
-moveOnLevel dir = do lvl <- get
-                     put $ execState (iterateUntil id (stepLevel dir)) lvl
-                     return ()
+moveOnLevel :: Direction -> GameLevel -> GameLevel
+moveOnLevel dir = execState $ iterateUntil id (stepLevel dir)
+
+simulatePath ::  GameLevel -> [Direction] -> GameLevel
+simulatePath = foldl' (flip moveOnLevel)
 
 vertical :: [Direction]
 vertical = [DirUp, DirDown]
@@ -160,5 +163,18 @@ randPath = do
   numToDrop <- getRandomR (0,1)
   path <- sequence $ interleave (repeat $ choose vertical) (repeat $ choose horizontal)
   return $ drop numToDrop path
+
+randPos :: MonadRandom m => Dimensions -> m Pos
+randPos dim = Pos <$> getRandomR (0, dimX dim) <*> getRandomR (0, dimY dim)
+
+randPoss' :: MonadRandom m => Dimensions -> StateT (Set Pos) m Int
+randPoss' dim = do ps <- get
+                   np <- lift (randPos dim)
+                   let nps = Set.insert np ps
+                   put nps
+                   return $ Set.size nps
+
+randPoss :: MonadRandom m => Dimensions -> Int -> m (Set Pos)
+randPoss dim n = execStateT (iterateUntil (>= n) (randPoss' dim)) Set.empty
 
 main = return ()
