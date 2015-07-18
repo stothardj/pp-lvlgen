@@ -9,38 +9,40 @@ import Control.Monad.State.Lazy
 import Data.List
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Sequence (Seq, (><))
+import qualified Data.Sequence as Seq
 
 data Color = Red | Green | Blue
-           deriving (Show, Eq)
+           deriving (Show, Eq, Ord)
 data Pos = Pos { posX :: Int, posY :: Int}
            deriving (Show, Eq, Ord)
 data Dimensions = Dimensions { dimX :: Int, dimY :: Int}
-                deriving Show
+                deriving (Show, Ord, Eq)
 data Direction = DirUp | DirDown | DirLeft | DirRight
                deriving Show
 data BoxAction = BoxMove | BoxDisappear
-               deriving (Show, Eq)
+               deriving (Show, Eq, Ord)
 data GoalAction = GoalDisappear
-                deriving (Show, Eq)
+                deriving (Show, Eq, Ord)
 
 data Box = Box { _boxPos :: Pos
                , _boxColor :: Color
                , _boxActions :: [BoxAction] }
-         deriving Show
+         deriving (Show, Ord, Eq)
 $(makeLenses ''Box)
 data Goal = Goal { _goalPos :: Pos
                  , _goalColor :: Color
                  , _goalActions :: [GoalAction] }
-          deriving Show
+          deriving (Show, Ord, Eq)
 $(makeLenses ''Goal)
 data Wall = Wall { _wallPos :: Pos }
-          deriving Show
+          deriving (Show, Ord, Eq)
 $(makeLenses ''Wall)
 data GameLevel = GameLevel { _lvlBoxes :: [Box]
                            , _lvlGoals :: [Goal]
                            , _lvlWalls :: [Wall]
                            , _lvlDimensions :: Dimensions}
-               deriving Show
+               deriving (Show, Ord, Eq)
 $(makeLenses ''GameLevel)
 
 class Colored a where
@@ -145,6 +147,27 @@ moveOnLevel dir = execState $ iterateUntil id (stepLevel dir)
 
 simulatePath ::  GameLevel -> [Direction] -> GameLevel
 simulatePath = foldl' (flip moveOnLevel)
+
+solve' :: Set GameLevel -> Seq ([Direction], GameLevel) -> Maybe [Direction]
+solve' seen q
+  | Seq.null q = Nothing
+  | isGameOver lvl = Just dirs
+  | otherwise = solve'  nextseen nextq
+  where cur = q `Seq.index` 0
+        (dirs, lvl) = cur
+        nq = Seq.drop 1 q
+        f (d, l) nd = (nd:d, moveOnLevel nd l)
+        nlvls = map (f cur) allDirections
+        nextseen = Set.insert lvl seen
+        nextq = if (lvl `Set.member` seen) then nq else nq >< Seq.fromList nlvls
+
+solve :: GameLevel -> Maybe [Direction]
+solve lvl = solve' s q
+  where s = Set.singleton lvl
+        q = Seq.singleton ([], lvl)
+
+allDirections :: [Direction]
+allDirections = vertical ++ horizontal
 
 vertical :: [Direction]
 vertical = [DirUp, DirDown]
