@@ -13,7 +13,7 @@ import Data.Sequence (Seq, (><))
 import qualified Data.Sequence as Seq
 
 data Color = Red | Green | Blue
-           deriving (Show, Eq, Ord)
+           deriving (Show, Eq, Ord, Enum)
 data Pos = Pos { posX :: Int, posY :: Int}
            deriving (Show, Eq, Ord)
 data Dimensions = Dimensions { dimX :: Int, dimY :: Int}
@@ -145,14 +145,14 @@ stepLevel dir = do lvl <- get
 moveOnLevel :: Direction -> GameLevel -> GameLevel
 moveOnLevel dir = execState $ iterateUntil id (stepLevel dir)
 
-simulatePath ::  GameLevel -> [Direction] -> GameLevel
+simulatePath :: GameLevel -> [Direction] -> GameLevel
 simulatePath = foldl' (flip moveOnLevel)
 
 solve' :: Set GameLevel -> Seq ([Direction], GameLevel) -> Maybe [Direction]
 solve' seen q
   | Seq.null q = Nothing
   | isGameOver lvl = Just dirs
-  | otherwise = solve'  nextseen nextq
+  | otherwise =  solve'  nextseen nextq
   where cur = q `Seq.index` 0
         (dirs, lvl) = cur
         nq = Seq.drop 1 q
@@ -163,7 +163,7 @@ solve' seen q
 
 solve :: GameLevel -> Maybe [Direction]
 solve lvl = solve' s q
-  where s = Set.singleton lvl
+  where s = Set.empty
         q = Seq.singleton ([], lvl)
 
 allDirections :: [Direction]
@@ -178,26 +178,66 @@ horizontal = [DirLeft, DirRight]
 choose :: MonadRandom m => [a] -> m a
 choose ls = liftM (ls !!) $ getRandomR (0, (length ls) - 1)
 
+uniqueRandom' :: (Monad m, Ord a1) => Set a1 -> m a1 -> Int -> m (Set a1)
+uniqueRandom' accum _ 0 = return accum
+uniqueRandom' accum r n = do
+  item <- r
+  let newN = if item `Set.member` accum then n else n-1
+  uniqueRandom' (Set.insert item accum) r newN
+
+uniqueRandom :: (Monad m, Ord a1) => m a1 -> Int -> m (Set a1)
+uniqueRandom = uniqueRandom' Set.empty
+
+repeatRandom :: Monad m => m t -> Int -> m [t]
+repeatRandom r n = sequence $ replicate n r
+
+sample :: (Ord a1, MonadRandom m) => [a1] -> Int -> m (Set a1)
+sample ls = uniqueRandom (choose ls)
+
 interleave :: [a] -> [a] -> [a]
 interleave a b = concat . transpose $ [a,b]
 
-randPath :: MonadRandom m => m [Direction]
-randPath = do
+-- MonadRandom's bind is strict, therefore we can't return an infinite list easily
+randPath :: MonadRandom m => Int -> m [Direction]
+randPath n = do
   numToDrop <- getRandomR (0,1)
-  path <- sequence $ interleave (repeat $ choose vertical) (repeat $ choose horizontal)
-  return $ drop numToDrop path
+  path <- sequence $ interleave
+          (replicate n (choose vertical)) (replicate n (choose horizontal))
+  return $ take n . drop numToDrop $ path
 
 randPos :: MonadRandom m => Dimensions -> m Pos
 randPos dim = Pos <$> getRandomR (0, dimX dim) <*> getRandomR (0, dimY dim)
 
-randPoss' :: MonadRandom m => Dimensions -> StateT (Set Pos) m Int
-randPoss' dim = do ps <- get
-                   np <- lift (randPos dim)
-                   let nps = Set.insert np ps
-                   put nps
-                   return $ Set.size nps
+allColors :: [Color]
+allColors = [Red ..]
 
-randPoss :: MonadRandom m => Dimensions -> Int -> m (Set Pos)
-randPoss dim n = execStateT (iterateUntil (>= n) (randPoss' dim)) Set.empty
+size :: Dimensions -> Int
+size dim = dimX dim * dimY dim
+
+-- Generates a possible level. Not guarenteed to be solveable, that must be checked
+genPossibleLevel :: MonadRandom m => Int -> Dimensions -> m GameLevel
+genPossibleLevel numBoxes dimensions = do
+  let pathDist = 20
+      numWalls = size dimensions `div` 5
+  boxPositions <- liftM Set.toList (uniqueRandom (randPos dimensions) numBoxes)
+  colors <- repeatRandom (choose allColors) numBoxes
+  let boxes = zipWith (\ p c -> Box p c []) boxPositions colors
+  wallPositions <- liftM ((\\ boxPositions) . Set.toList)
+                   (uniqueRandom (randPos dimensions) numWalls)
+  let walls = map Wall wallPositions
+  path <- liftM (take pathDist) (randPath pathDist)
+  let levelAfterBoxesMoved = simulatePath (GameLevel boxes [] walls dimensions) path
+      finalBoxes = levelAfterBoxesMoved^.lvlBoxes
+      toGoal b = Goal (b^.boxPos) (b^.boxColor) []
+      goals = map toGoal finalBoxes
+  return $ GameLevel boxes goals walls dimensions
+
+genLevel :: MonadRandom m => Int -> Dimensions -> m (GameLevel, [Direction])
+genLevel numBoxes dimensions = do
+  lvl <- genPossibleLevel numBoxes dimensions
+  let solution = solve lvl
+  case solution of
+   Just sol -> return (lvl, sol)
+   Nothing -> genLevel numBoxes dimensions
 
 main = return ()
