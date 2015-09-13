@@ -1,16 +1,20 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
 
-import Control.Lens
+import Control.Lens hiding ((.=))
 import Control.Monad
 import Control.Monad.Loops
 import Control.Monad.Random
 import Control.Monad.State.Lazy
+import Data.Aeson
+import qualified Data.ByteString.Lazy.Char8 as BS
 import Data.List
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Sequence (Seq, (><))
 import qualified Data.Sequence as Seq
+import System.Environment
 
 data Color = Red | Green | Blue
            deriving (Show, Eq, Ord, Enum)
@@ -44,6 +48,9 @@ data GameLevel = GameLevel { _lvlBoxes :: [Box]
                            , _lvlDimensions :: Dimensions}
                deriving (Show, Ord, Eq)
 $(makeLenses ''GameLevel)
+
+data LevelOutput = LevelOutput { outLevel :: GameLevel
+                               , outSolution :: [Direction] }
 
 class Colored a where
   color :: Functor f => (Color -> f Color) -> a -> f a
@@ -232,12 +239,65 @@ genPossibleLevel numBoxes dimensions = do
       goals = map toGoal finalBoxes
   return $ GameLevel boxes goals walls dimensions
 
-genLevel :: MonadRandom m => Int -> Dimensions -> m (GameLevel, [Direction])
+genLevel :: MonadRandom m => Int -> Dimensions -> m LevelOutput
 genLevel numBoxes dimensions = do
   lvl <- genPossibleLevel numBoxes dimensions
   let solution = solve lvl
   case solution of
-   Just sol -> return (lvl, sol)
+   Just sol -> return (LevelOutput lvl sol)
    Nothing -> genLevel numBoxes dimensions
 
-main = return ()
+instance ToJSON Pos where
+  toJSON pos =
+   object [ "x" .= (posX pos)
+          , "y" .= (posY pos)]
+
+instance ToJSON Color where
+  toJSON = toJSON . show
+
+instance ToJSON Box where
+  toJSON box =
+    object [ "pos" .= (box^.boxPos)
+           , "color" .= (box^.boxColor)]
+
+instance ToJSON Goal where
+  toJSON goal =
+    object [ "pos" .= (goal^.goalPos)
+           , "color" .= (goal^.goalColor)]
+
+instance ToJSON Wall where
+  toJSON wall =
+    object [ "pos" .= (wall^.wallPos)]
+
+instance ToJSON Dimensions where
+  toJSON dim =
+    object [ "dimX" .= (dimX dim)
+           , "dimY" .= (dimY dim)]
+
+instance ToJSON GameLevel where
+  toJSON lvl =
+    object [ "boxes" .= (lvl^.lvlBoxes)
+           , "goals" .= (lvl^.lvlGoals)
+           , "walls" .= (lvl^.lvlWalls)
+           , "dimensions" .= (lvl^.lvlDimensions)]
+
+instance ToJSON Direction where
+  toJSON dir = case dir of
+    DirUp -> "Up"
+    DirDown -> "Down"
+    DirLeft -> "Left"
+    DirRight -> "Right"
+
+instance ToJSON LevelOutput where
+  toJSON out =
+    object [ "level" .= (outLevel out)
+           , "solution" .= (outSolution out)]
+
+main = do
+  args <- getArgs
+  let numBoxes = read $ args !! 0
+      dx = read $ args !! 1
+      dy = read $ args !! 2
+      dim = Dimensions dx dy
+  l <- evalRandIO $ genLevel numBoxes dim
+  BS.putStrLn $ encode l
